@@ -1,7 +1,6 @@
 import time
 from typing import cast
 from dataclasses import dataclass, field, replace
-from collections import deque
 from tinygrad.uop.ops import UOp, Ops, buffers, UOpMetaClass
 from tinygrad.uop.spec import type_verify, tensor_spec
 from tinygrad.device import Buffer, MultiBuffer
@@ -20,51 +19,27 @@ class ScheduleItem:
 # **** schedule linearizer
 
 def create_schedule_with_vars(sched_sink:UOp) -> tuple[list[ScheduleItem], dict[str, int]]:
-  with cpu_profile(TracingKey("toposort sched_sink")):
-    # construct the KERNEL children graph based on assigns
-    children: dict[UOp, list[UOp]] = {}
-    in_degree: dict[UOp, int] = {}
+  from tinygrad.codegen.late.linearizer import linearize
+
+  with cpu_profile(TracingKey("linearize sched_sink")):
+    # linearize handles both kernel-level and schedule-level toposort with priorities
+    # disable tuple_order for schedule-level since Kernel objects aren't comparable
+    linearized = linearize(sched_sink, tuple_order=False)
+
+  with cpu_profile(TracingKey("extract var_vals and create schedule")):
     var_vals: dict[str, int] = {}
-    for u in sched_sink.toposort():
-      if u.op is Ops.RANGE:
-        in_degree.setdefault(u, 0)
-        continue
-      if u.op is not Ops.AFTER or u.src[1].op is Ops.RANGE: continue
-      k = u.src[1]
-      in_degree.setdefault(k, 0)
-      for s in k.src[0].src if k.op is Ops.END else k.src:
-        if s.op is Ops.AFTER:
-          children.setdefault(s.src[1], []).append(k)
-          in_degree[k] += 1
-        elif s.op in {Ops.MSELECT, Ops.MSTACK}:
-          for ss in s.src:
-            if ss.op is Ops.MSELECT: ss = ss.src[0]
-            if ss.op is not Ops.BUFFER:
-              assert ss.op is Ops.AFTER, f"ss.op is not AFTER, it's {ss.op}"
-              children.setdefault(ss.src[1], []).append(k)
-              in_degree[k] += 1
-        elif s.op is Ops.BUFFER:
-          pass  # a BUFFER is already realized, nothing to do here
-        elif s.op is Ops.BIND:
-          # for RANGE this is in fixedvars
-          if s.src[1].op is not Ops.RANGE:
-            var, val = s.unbind()
-            assert var.expr not in var_vals or var_vals[var.expr] == val, f"bind mismatch on {var}, {var_vals[var.expr]} != {val}"
-            var_vals[var.expr] = val
-        else:
-          raise RuntimeError(f"input to kernel must be AFTER or BUFFER, not {s.op}")
-
-  with cpu_profile(TracingKey("linearize to ScheduleItem")):
-    queue: deque[UOp] = deque()
-    for k,v in in_degree.items():
-      if v == 0: queue.append(k)
-
     schedule: list[ScheduleItem|UOp] = []
-    while len(queue):
-      k = rk = queue.popleft()
+    for k in linearized:
+      rk = k
       if k.op is Ops.END: k = k.src[0]
       if k.op is Ops.RANGE: schedule.append(k)
       elif k.op is Ops.KERNEL:
+        # extract var_vals from BIND operations that are inputs to this kernel
+        for s in k.src:
+          if s.op is Ops.BIND and s.src[1].op is not Ops.RANGE:
+            var, val = s.unbind()
+            assert var.expr not in var_vals or var_vals[var.expr] == val, f"bind mismatch on {var}, {var_vals[var.expr]} != {val}"
+            var_vals[var.expr] = val
         ast = k.arg.ast
         # create subbuffers if needed
         if ast.op is Ops.BUFFER_VIEW:
@@ -82,11 +57,6 @@ def create_schedule_with_vars(sched_sink:UOp) -> tuple[list[ScheduleItem], dict[
           # ONE -> ONE
           schedule.append(ScheduleItem(ast, cast(tuple[Buffer, ...], ubufs), k.arg.metadata, bound_ranges=bound_ranges))
         if rk.op is Ops.END: schedule.append(rk)
-      else:
-        raise RuntimeError(f"can't schedule {k.op}")
-      for x in children.get(rk, []):
-        in_degree[x] -= 1
-        if in_degree[x] == 0: queue.append(x)
 
   with cpu_profile(TracingKey("expand ranges")):
     real_schedule: list[ScheduleItem] = []
