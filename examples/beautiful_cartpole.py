@@ -105,7 +105,7 @@ if __name__ == "__main__":
     # reward to go
     # TODO: move this into tinygrad
     discounts = DISCOUNT_FACTOR ** Tensor.arange(len(rews))
-    Rn += ((Tensor(rews)*discounts).flip(0).cumsum().flip(0) / discounts).tolist
+    Rn += ((Tensor(rews)*discounts).flip(0).cumsum().flip(0) / discounts).tolist()
 
     Xn, An, Rn = Xn[-REPLAY_BUFFER_SIZE:], An[-REPLAY_BUFFER_SIZE:], Rn[-REPLAY_BUFFER_SIZE:]
     X, A, R = Tensor(Xn), Tensor(An), Tensor(Rn)
