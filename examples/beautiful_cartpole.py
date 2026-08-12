@@ -3,7 +3,6 @@ import time
 from tinygrad import Tensor, TinyJit, nn, Context
 import gymnasium as gym
 from tinygrad.helpers import trange
-import numpy as np  # TODO: remove numpy import
 
 ENVIRONMENT_NAME = 'CartPole-v1'
 #ENVIRONMENT_NAME = 'LunarLander-v2'
@@ -86,7 +85,7 @@ if __name__ == "__main__":
   for episode_number in (t:=trange(EPISODES)):
     get_action.reset()   # NOTE: if you don't reset the jit here it captures the wrong model on the first run through
 
-    obs:np.ndarray = env.reset()[0]
+    obs = env.reset()[0]
     rews, terminated, truncated = [], False, False
     # NOTE: we don't want to early stop since then the rewards are wrong for the last episode
     while not terminated and not truncated:
@@ -96,7 +95,7 @@ if __name__ == "__main__":
 
       # save this state action pair
       # TODO: don't use np.copy here on the CPU, what's the tinygrad way to do this and keep on device? need __setitem__ assignment
-      Xn.append(np.copy(obs))
+      Xn.append(obs.tolist())
       An.append(act)
 
       obs, rew, terminated, truncated, _ = env.step(act)
@@ -105,8 +104,8 @@ if __name__ == "__main__":
 
     # reward to go
     # TODO: move this into tinygrad
-    discounts = np.power(DISCOUNT_FACTOR, np.arange(len(rews)))
-    Rn += [np.sum(rews[i:] * discounts[:len(rews)-i]) for i in range(len(rews))]
+    discounts = DISCOUNT_FACTOR ** Tensor.arange(len(rews))
+    Rn += ((Tensor(rews)*discounts).flip(0).cumsum().flip(0) / discounts).tolist
 
     Xn, An, Rn = Xn[-REPLAY_BUFFER_SIZE:], An[-REPLAY_BUFFER_SIZE:], Rn[-REPLAY_BUFFER_SIZE:]
     X, A, R = Tensor(Xn), Tensor(An), Tensor(Rn)
