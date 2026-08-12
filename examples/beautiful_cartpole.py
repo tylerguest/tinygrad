@@ -103,7 +103,6 @@ if __name__ == "__main__":
     steps += len(rews)
 
     # reward to go
-    # TODO: move this into tinygrad
     discounts = DISCOUNT_FACTOR ** Tensor.arange(len(rews))
     Rn += ((Tensor(rews)*discounts).flip(0).cumsum().flip(0) / discounts).tolist()
 
