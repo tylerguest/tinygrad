@@ -81,33 +81,39 @@ if __name__ == "__main__":
     return ret
 
   st, steps = time.perf_counter(), 0
-  X = Tensor.empty(REPLAY_BUFFER_SIZE, env.observation_space.shape[0]).contiguous().realize()
-  A = Tensor.empty(REPLAY_BUFFER_SIZE, dtype=dtypes.int).contiguous().realize()
-  R = Tensor.empty(REPLAY_BUFFER_SIZE).contiguous().realize()
+  X = Tensor.empty(REPLAY_BUFFER_SIZE, env.observation_space.shape[0]).realize()
+  A = Tensor.empty(REPLAY_BUFFER_SIZE, dtype=dtypes.int).realize()
+  R = Tensor.empty(REPLAY_BUFFER_SIZE).realize()
   pos, sz = 0, 0
   for episode_number in (t:=trange(EPISODES)):
     get_action.reset()   # NOTE: if you don't reset the jit here it captures the wrong model on the first run through
 
     obs = env.reset()[0]
-    rews, terminated, truncated = [], False, False
+    Xn, An, rews, terminated, truncated = [], [], [], False, False
     # NOTE: we don't want to early stop since then the rewards are wrong for the last episode
     while not terminated and not truncated:
       # pick actions
       # TODO: what's the temperature here?
       act = get_action(Tensor(obs)).item()
 
-      X[pos], A[pos] = Tensor(obs), act
-      pos, sz = (pos+1) % REPLAY_BUFFER_SIZE, min(sz+1, REPLAY_BUFFER_SIZE)
+      Xn.append(obs.tolist())
+      An.append(act)
 
       obs, rew, terminated, truncated, _ = env.step(act)
       rews.append(float(rew))
     steps += len(rews)
 
     reward_to_go = 0.0
-    for i, rew in enumerate(reversed(rews[-REPLAY_BUFFER_SIZE:]), 1):
+    Rn = []
+    for rew in reversed(rews):
       reward_to_go = rew + DISCOUNT_FACTOR*reward_to_go
-      R[(pos-i) % REPLAY_BUFFER_SIZE] = reward_to_go
-    Tensor.realize(X, A, R)
+      Rn.append(reward_to_go)
+    Xep, Aep, Rep = Tensor(Xn[-REPLAY_BUFFER_SIZE:]), Tensor(An[-REPLAY_BUFFER_SIZE:], dtype=dtypes.int), Tensor(Rn[::-1][-REPLAY_BUFFER_SIZE:])
+    n, first = len(Rep), min(len(Rep), REPLAY_BUFFER_SIZE-pos)
+    for buf, ep in ((X, Xep), (A, Aep), (R, Rep)):
+      buf[pos:pos+first].assign(ep[:first]).realize()
+      if first < n: buf[:n-first].assign(ep[first:]).realize()
+    pos, sz = (pos+n) % REPLAY_BUFFER_SIZE, min(sz+n, REPLAY_BUFFER_SIZE)
 
     old_log_dist = model(X[:sz])[0].detach()   # TODO: could save these instead of recomputing
     for i in range(TRAIN_STEPS):
