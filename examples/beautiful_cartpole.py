@@ -84,40 +84,43 @@ if __name__ == "__main__":
   X = Tensor.empty(REPLAY_BUFFER_SIZE, env.observation_space.shape[0]).realize()
   A = Tensor.empty(REPLAY_BUFFER_SIZE, dtype=dtypes.int).realize()
   R = Tensor.empty(REPLAY_BUFFER_SIZE).realize()
-  pos, sz = 0, 0
+  write_pos, replay_size = 0, 0
   for episode_number in (t:=trange(EPISODES)):
     get_action.reset()   # NOTE: if you don't reset the jit here it captures the wrong model on the first run through
 
     obs = env.reset()[0]
-    Xn, An, rews, terminated, truncated = [], [], [], False, False
+    observations, actions, rews, terminated, truncated = [], [], [], False, False
     # NOTE: we don't want to early stop since then the rewards are wrong for the last episode
     while not terminated and not truncated:
       # pick actions
       # TODO: what's the temperature here?
       act = get_action(Tensor(obs)).item()
 
-      Xn.append(obs.tolist())
-      An.append(act)
+      observations.append(obs.tolist())
+      actions.append(act)
 
       obs, rew, terminated, truncated, _ = env.step(act)
       rews.append(float(rew))
     steps += len(rews)
 
     reward_to_go = 0.0
-    Rn = [reward_to_go := rew + DISCOUNT_FACTOR*reward_to_go for rew in reversed(rews)]
-    Xep, Aep, Rep = Tensor(Xn[-REPLAY_BUFFER_SIZE:]), Tensor(An[-REPLAY_BUFFER_SIZE:], dtype=dtypes.int), Tensor(Rn[::-1][-REPLAY_BUFFER_SIZE:])
-    n, first = len(Rep), min(len(Rep), REPLAY_BUFFER_SIZE-pos)
-    for buf, ep in ((X, Xep), (A, Aep), (R, Rep)):
-      buf[pos:pos+first].assign(ep[:first]).realize()
-      if first < n: buf[:n-first].assign(ep[first:]).realize()
-    pos, sz = (pos+n) % REPLAY_BUFFER_SIZE, min(sz+n, REPLAY_BUFFER_SIZE)
+    returns = [reward_to_go := rew + DISCOUNT_FACTOR*reward_to_go for rew in reversed(rews)][::-1]
+    episode_X = Tensor(observations[-REPLAY_BUFFER_SIZE:])
+    episode_A = Tensor(actions[-REPLAY_BUFFER_SIZE:], dtype=dtypes.int)
+    episode_R = Tensor(returns[-REPLAY_BUFFER_SIZE:])
+    episode_size, first_write = len(episode_R), min(len(episode_R), REPLAY_BUFFER_SIZE-write_pos)
+    for buffer, episode in ((X, episode_X), (A, episode_A), (R, episode_R)):
+      buffer[write_pos:write_pos+first_write].assign(episode[:first_write]).realize()
+      if first_write < episode_size: buffer[:episode_size-first_write].assign(episode[first_write:]).realize()
+    write_pos = (write_pos+episode_size) % REPLAY_BUFFER_SIZE
+    replay_size = min(replay_size+episode_size, REPLAY_BUFFER_SIZE)
 
-    old_log_dist = model(X[:sz])[0].detach()   # TODO: could save these instead of recomputing
+    old_log_dist = model(X[:replay_size])[0].detach()   # TODO: could save these instead of recomputing
     for i in range(TRAIN_STEPS):
-      samples = Tensor.randint(BATCH_SIZE, high=sz).realize()  # TODO: remove the need for this
+      samples = Tensor.randint(BATCH_SIZE, high=replay_size).realize()  # TODO: remove the need for this
       # TODO: is this recompiling based on the shape?
       action_loss, entropy_loss, critic_loss = train_step(X[samples], A[samples], R[samples], old_log_dist[samples])
-    t.set_description(f"sz: {sz:5d} steps/s: {steps/(time.perf_counter()-st):7.2f} action_loss: {action_loss.item():7.3f} entropy_loss: {entropy_loss.item():7.3f} critic_loss: {critic_loss.item():8.3f} reward: {sum(rews):6.2f}")
+    t.set_description(f"sz: {replay_size:5d} steps/s: {steps/(time.perf_counter()-st):7.2f} action_loss: {action_loss.item():7.3f} entropy_loss: {entropy_loss.item():7.3f} critic_loss: {critic_loss.item():8.3f} reward: {sum(rews):6.2f}")
     del old_log_dist, samples, action_loss, entropy_loss, critic_loss
 
   test_rew = evaluate(model, gym.make(ENVIRONMENT_NAME, render_mode='human'))
