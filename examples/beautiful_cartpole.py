@@ -104,10 +104,7 @@ if __name__ == "__main__":
     steps += len(rews)
 
     reward_to_go = 0.0
-    Rn = []
-    for rew in reversed(rews):
-      reward_to_go = rew + DISCOUNT_FACTOR*reward_to_go
-      Rn.append(reward_to_go)
+    Rn = [reward_to_go := rew + DISCOUNT_FACTOR*reward_to_go for rew in reversed(rews)]
     Xep, Aep, Rep = Tensor(Xn[-REPLAY_BUFFER_SIZE:]), Tensor(An[-REPLAY_BUFFER_SIZE:], dtype=dtypes.int), Tensor(Rn[::-1][-REPLAY_BUFFER_SIZE:])
     n, first = len(Rep), min(len(Rep), REPLAY_BUFFER_SIZE-pos)
     for buf, ep in ((X, Xep), (A, Aep), (R, Rep)):
