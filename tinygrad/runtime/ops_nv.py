@@ -100,8 +100,13 @@ def nv_submit(cmdbuf:UOp, ring:UOp, gpput:UOp, doorbell:UOp, put:UOp, token:int)
   gpentry = cmdbuf.getaddr(cmdbuf.device) + UOp.const((cmdbuf.max_numel() // 4 << 42) | (1 << 41), dtypes.uint64)
   p, n = put.index(0).load(), ring.max_numel()
   written = UOp.barrier(ring.index((p % n).cast(dtypes.int)).store(gpentry), put.index(0).store(p + 1))
+  # the ring and GPPut are write-combined BAR1 (vram), the doorbell is BAR0 mmio: a fence orders them leaving the cpu, not landing in vram.
+  # read GPPut back (volatile, so it is kept) so the posted writes complete before the doorbell, else the scheduler can read a stale GPPut
+  # and never fetch this entry.
+  gpput = gpput.replace(arg=replace(gpput.arg, volatile=True))
   queued = UOp.barrier(gpput.after(written).index(0).store(((p + 1) % n).cast(dtypes.uint32)))
-  return doorbell.after(queued).index(0).store(UOp.const(token, dtypes.uint32)).sink()
+  flushed = UOp.barrier(gpput.after(queued).index(0).load())
+  return doorbell.after(flushed).index(0).store(UOp.const(token, dtypes.uint32)).sink()
 
 class NVQueue(HWQueue):
   dev:NVDevice
