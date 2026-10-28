@@ -1,6 +1,6 @@
-import unittest
-from tinygrad.device import Buffer, Device
-from tinygrad.helpers import Context
+import mmap, unittest
+from tinygrad.device import Buffer, BufferSpec, Device
+from tinygrad.helpers import Context, mv_address
 
 class TestBuffer(unittest.TestCase):
   def test_host_view(self):
@@ -42,5 +42,13 @@ class TestBuffer(unittest.TestCase):
         buf = b._buf
         b.deallocate()
         self.assertEqual(b._buf is buf, opaque is None)
+
+  @unittest.skipUnless(Device.DEFAULT == "NV", "NV maps cpu memory at its cpu address")
+  def test_remap_freed_host_address(self):
+    page = mmap.mmap(-1, mmap.PAGESIZE)
+    for size in (4, 64):
+      b = Buffer("CPU", size, options=BufferSpec(external_ptr=mv_address(memoryview(page)))).ensure_allocated()
+      self.assertEqual(b.get_buf("NV"), b._buf)
+      b.deallocate()
 
 if __name__ == "__main__": unittest.main()

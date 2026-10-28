@@ -496,7 +496,11 @@ class NVKIface:
 
   def unmap(self, mapping:BufferStorage):
     mem, owns_range = mapping.meta
-    if owns_range: self.uvm(nv_gpu.UVM_FREE, nv_gpu.UVM_FREE_PARAMS(base=mapping.buf, length=mem.length))
+    if owns_range:
+      self.uvm(nv_gpu.UVM_FREE, nv_gpu.UVM_FREE_PARAMS(base=mapping.buf, length=mem.length))
+      made = nv_gpu.NVOS00_PARAMETERS(hRoot=self.root, hObjectParent=self.dev.nvdevice, hObjectOld=mem.hMemory)
+      nv_iowr(self.fd_ctl, nv_gpu.NV_ESC_RM_FREE, made)
+      if made.status != 0: raise RuntimeError(f"host unmap returned {get_error_str(made.status)}")
 
   def _gpu_uvm_map(self, va_base, size, mem_handle, create_range=True, has_cpu_mapping=False) -> BufferStorage:
     if create_range:
